@@ -104,8 +104,8 @@ class tool_generator_testplan_backend extends tool_generator_backend {
      *                 to match the threads in the plan. For BC, defaults to null that means all enrolled users.
      * @return stored_file
      */
-    public static function create_users_file($courseid, $updateuserspassword, ?int $size = null) {
-        $csvcontents = self::generate_users_file($courseid, $updateuserspassword, $size);
+    public static function create_users_file($courseIdList, $updateuserspassword, ?int $size = null, ) {
+        $csvcontents = self::generate_users_file($courseIdList, $updateuserspassword, $size);
 
         $fs = get_file_storage();
         $filerecord = self::get_file_record('users', 'csv');
@@ -136,9 +136,9 @@ class tool_generator_testplan_backend extends tool_generator_backend {
 
         $replacements = array(
             $CFG->version,
-            self::$users[$size],
-            self::$loops[$size],
-            self::$rampups[$size],
+            $size,
+            $size,
+            $size,
             $urlcomponents['host'],
             $urlcomponents['path'],
             get_string('shortsize_' . $size, 'tool_generator'),
@@ -177,31 +177,33 @@ class tool_generator_testplan_backend extends tool_generator_backend {
      *                 to match the threads in the plan. For BC, defaults to null that means all enrolled users.
      * @return string The users csv file contents.
      */
-    protected static function generate_users_file($targetcourseid, $updateuserspassword, ?int $size = null) {
+    protected static function generate_users_file($courseIdList, $updateuserspassword, ?int $size = null) {
         global $CFG;
-
-        $coursecontext = context_course::instance($targetcourseid);
-
-        // If requested, get the number of users (threads) to use in the plan. We only need those in the exported file.
-        $planusers = self::$users[$size] ?? 0;
-        $users = get_enrolled_users($coursecontext, '', 0, 'u.id, u.username, u.auth', 'u.username ASC', 0, $planusers);
-        if (!$users) {
-            throw new \moodle_exception('coursewithoutusers', 'tool_generator');
-        }
-
         $lines = array();
-        foreach ($users as $user) {
 
-            // Updating password to the one set in config.php.
-            if ($updateuserspassword) {
-                $userauth = get_auth_plugin($user->auth);
-                if (!$userauth->user_update_password($user, $CFG->tool_generator_users_password)) {
-                    throw new \moodle_exception('errorpasswordupdate', 'auth');
-                }
+        foreach ($courseIdList as $courseId) {
+            $coursecontext = context_course::instance($courseId);
+
+            // If requested, get the number of users (threads) to use in the plan. We only need those in the exported file.
+            // $planusers = self::$users[$size] ?? 0;
+            $users = get_enrolled_users($coursecontext, '', 0, 'u.id, u.username, u.auth', 'u.username ASC', 0, $size);
+            if (!$users) {
+                throw new \moodle_exception('coursewithoutusers', 'tool_generator');
             }
-
-            // Here we already checked that $CFG->tool_generator_users_password is not null.
-            $lines[] = $user->username . ',' . $CFG->tool_generator_users_password;
+            $coursedata = self::get_course_test_data($courseId);
+            foreach ($users as $user) {
+                // Updating password to the one set in config.php.
+                if ($updateuserspassword) {
+                    $userauth = get_auth_plugin($user->auth);
+                    if (!$userauth->user_update_password($user, $CFG->tool_generator_users_password)) {
+                        throw new \moodle_exception('errorpasswordupdate', 'auth');
+                    }
+                }
+    
+                // Here we already checked that $CFG->tool_generator_users_password is not null.
+                //username, password, forumid, forumdiscussionid, forumreplyid, pageid.
+                $lines[] = $user->username . ',' . $CFG->tool_generator_users_password . ',' . $courseId . ',' . $coursedata->forumid . ',' . $coursedata->forumdiscussionid . ',' . $coursedata->forumreplyid . ',' . $coursedata->pageid;
+            }
         }
 
         return implode(PHP_EOL, $lines);
@@ -304,7 +306,7 @@ class tool_generator_testplan_backend extends tool_generator_backend {
 
         // Checks that the selected course has enough users.
         $coursesizes = tool_generator_course_backend::get_users_per_size();
-        if (count($users) < self::$users[$size]) {
+        if (count($users) < $size) {
             $errors['size'] = get_string('notenoughusers', 'tool_generator');
         }
 

@@ -96,6 +96,8 @@ class tool_generator_course_backend extends tool_generator_backend {
      * @var string Course summary.
      */
     private $summary = "";
+    private $coursescount;
+    private $userscount;
 
     /**
      * @var string Course summary format, defaults to FORMAT_HTML.
@@ -111,6 +113,8 @@ class tool_generator_course_backend extends tool_generator_backend {
      * @var stdClass Course object
      */
     private $course;
+
+    private $courseslist;
 
     /**
      * @var array Array from test user number (1...N) to userid in database
@@ -134,18 +138,21 @@ class tool_generator_course_backend extends tool_generator_backend {
     public function __construct(
         $shortname,
         $size,
+        $userscount,
+        $coursescount,
         $fixeddataset = false,
         $filesizelimit = false,
         $progress = true,
         $fullname = null,
         $summary = null,
         $summaryformat = FORMAT_HTML,
-        $additionalmodules = []
+        $additionalmodules = [],
     ) {
 
         // Set parameters.
         $this->shortname = $shortname;
-
+        $this->userscount = $userscount;
+        $this->coursescount = $coursescount;
         // We can't allow fullname to be set to an empty string.
         if (empty($fullname)) {
             $this->fullname = get_string(
@@ -213,7 +220,7 @@ class tool_generator_course_backend extends tool_generator_backend {
     /**
      * Runs the entire 'make' process.
      *
-     * @return int Course id
+     * @return array Course id
      */
     public function make() {
         global $DB, $CFG, $USER;
@@ -230,43 +237,49 @@ class tool_generator_course_backend extends tool_generator_backend {
         // Get generator.
         $this->generator = phpunit_util::get_data_generator();
 
-        // Make course.
-        $this->course = $this->create_course();
+        // Make courses.
+        for ($iter = 1; $iter <= $this->coursescount; $iter++) {
+            $currentcourse = $this->create_course($iter);
+            $this->courseslist[] = $currentcourse;
 
-        $this->create_assignments();
-        $this->create_pages();
-        $this->create_small_files();
-        $this->create_big_files();
+            $this->create_assignments($currentcourse);
+            $this->create_pages($currentcourse);
+            $this->create_small_files($currentcourse);
+            // $this->create_big_files();
 
-        // Create users as late as possible to reduce regarding in the gradebook.
-        $this->create_users();
-        $this->create_forum();
+            // Create users as late as possible to reduce regarding in the gradebook.
+            $this->create_users($currentcourse);
+            $this->create_forum($currentcourse);
 
-        // Let plugins hook into user settings navigation.
-        $pluginsfunction = get_plugins_with_function('course_backend_generator_create_activity');
-        foreach ($pluginsfunction as $plugintype => $plugins) {
-            foreach ($plugins as $pluginname => $pluginfunction) {
-                if (in_array($pluginname, $this->additionalmodules)) {
-                    $pluginfunction($this, $this->generator, $this->course->id, self::$paramactivities[$this->size]);
+            // Let plugins hook into user settings navigation.
+            $pluginsfunction = get_plugins_with_function('course_backend_generator_create_activity');
+            foreach ($pluginsfunction as $plugintype => $plugins) {
+                foreach ($plugins as $pluginname => $pluginfunction) {
+                    if (in_array($pluginname, $this->additionalmodules)) {
+                        $pluginfunction($this, $this->generator, $currentcourse->id, self::$paramactivities[$this->size]);
+                    }
                 }
+            }
+
+            // We are checking 'enroladminnewcourse' setting to decide to enrol admins or not.
+            if (!empty($CFG->creatornewroleid) && !empty($CFG->enroladminnewcourse) && is_siteadmin($USER->id)) {
+                // Deal with course creators - enrol them internally with default role.
+                enrol_try_internal_enrol($currentcourse->id, $USER->id, $CFG->creatornewroleid);
+            }
+
+            // Log total time.
+            $this->log('coursecompleted', round(microtime(true) - $entirestart, 1));
+            $this->end_log();
+
+            if ($this->progress && !CLI_SCRIPT) {
+                echo html_writer::end_tag('ul');
             }
         }
 
-        // We are checking 'enroladminnewcourse' setting to decide to enrol admins or not.
-        if (!empty($CFG->creatornewroleid) && !empty($CFG->enroladminnewcourse) && is_siteadmin($USER->id)) {
-            // Deal with course creators - enrol them internally with default role.
-            enrol_try_internal_enrol($this->course->id, $USER->id, $CFG->creatornewroleid);
-        }
+        $courseids = array_column($this->courseslist, 'id');
 
-        // Log total time.
-        $this->log('coursecompleted', round(microtime(true) - $entirestart, 1));
-        $this->end_log();
 
-        if ($this->progress && !CLI_SCRIPT) {
-            echo html_writer::end_tag('ul');
-        }
-
-        return $this->course->id;
+        return $courseids;
     }
 
     /**
@@ -274,16 +287,16 @@ class tool_generator_course_backend extends tool_generator_backend {
      *
      * @return stdClass Course record
      */
-    private function create_course() {
-        $this->log('createcourse', $this->shortname);
+    private function create_course($coursenum) {
+        $this->log('createcourse', $this->shortname.$coursenum);
         $courserecord = array(
-            'shortname' => $this->shortname,
-            'fullname' => $this->fullname,
+            'shortname' => $this->shortname.$coursenum,
+            'fullname' => $this->fullname.$coursenum,
             'numsections' => self::$paramsections[$this->size],
             'startdate' => usergetmidnight(time())
         );
         if (strlen($this->summary) > 0) {
-            $courserecord['summary'] = $this->summary;
+            $courserecord['summary'] = $this->summary.$coursenum;
             $courserecord['summary_format'] = $this->summaryformat;
         }
 
@@ -297,11 +310,11 @@ class tool_generator_course_backend extends tool_generator_backend {
      * Note: Existing user accounts that were created by this system are
      * reused if available.
      */
-    private function create_users() {
+    private function create_users($course) {
         global $DB;
 
         // Work out total number of users.
-        $count = self::$paramusers[$this->size];
+        $count = $this->userscount;
 
         // Get existing users in order. We will 'fill up holes' in this up to
         // the required number.
@@ -342,7 +355,7 @@ class tool_generator_course_backend extends tool_generator_backend {
         $this->log('enrol', $count, true);
 
         $enrolplugin = enrol_get_plugin('manual');
-        $instances = enrol_get_instances($this->course->id, true);
+        $instances = enrol_get_instances($course->id, true);
         foreach ($instances as $instance) {
             if ($instance->enrol === 'manual') {
                 break;
@@ -404,7 +417,7 @@ class tool_generator_course_backend extends tool_generator_backend {
     /**
      * Creates a number of Assignment activities.
      */
-    private function create_assignments() {
+    private function create_assignments($course) {
         // Set up generator.
         $assigngenerator = $this->generator->get_plugin_generator('mod_assign');
 
@@ -412,7 +425,7 @@ class tool_generator_course_backend extends tool_generator_backend {
         $number = self::$paramassignments[$this->size];
         $this->log('createassignments', $number, true);
         for ($i = 0; $i < $number; $i++) {
-            $record = array('course' => $this->course);
+            $record = array('course' => $course);
             $options = array('section' => $this->get_target_section());
             $assigngenerator->create_instance($record, $options);
             $this->dot($i, $number);
@@ -424,7 +437,7 @@ class tool_generator_course_backend extends tool_generator_backend {
     /**
      * Creates a number of Page activities.
      */
-    private function create_pages() {
+    private function create_pages($course) {
         // Set up generator.
         $pagegenerator = $this->generator->get_plugin_generator('mod_page');
 
@@ -432,7 +445,7 @@ class tool_generator_course_backend extends tool_generator_backend {
         $number = self::$parampages[$this->size];
         $this->log('createpages', $number, true);
         for ($i = 0; $i < $number; $i++) {
-            $record = array('course' => $this->course);
+            $record = array('course' => $course);
             $options = array('section' => $this->get_target_section());
             $pagegenerator->create_instance($record, $options);
             $this->dot($i, $number);
@@ -444,13 +457,13 @@ class tool_generator_course_backend extends tool_generator_backend {
     /**
      * Creates one resource activity with a lot of small files.
      */
-    private function create_small_files() {
+    private function create_small_files($course) {
         $count = self::$paramsmallfilecount[$this->size];
         $this->log('createsmallfiles', $count, true);
 
         // Create resource with default textfile only.
         $resourcegenerator = $this->generator->get_plugin_generator('mod_resource');
-        $record = array('course' => $this->course,
+        $record = array('course' => $course,
                 'name' => get_string('smallfiles', 'tool_generator'));
         $options = array('section' => 0);
         $resource = $resourcegenerator->create_instance($record, $options);
@@ -477,7 +490,7 @@ class tool_generator_course_backend extends tool_generator_backend {
     /**
      * Creates a number of resource activities with one big file each.
      */
-    private function create_big_files() {
+    private function create_big_files($course) {
         // Work out how many files and how many blocks to use (up to 64KB).
         $count = self::$parambigfilecount[$this->size];
         $filesize = $this->limit_filesize(self::$parambigfilesize[$this->size]);
@@ -495,7 +508,7 @@ class tool_generator_course_backend extends tool_generator_backend {
         $resourcegenerator = $this->generator->get_plugin_generator('mod_resource');
         for ($i = 0; $i < $count; $i++) {
             // Create resource.
-            $record = array('course' => $this->course,
+            $record = array('course' => $course,
                     'name' => get_string('bigfile', 'tool_generator', $i));
             $options = array('section' => $this->get_target_section());
             $resource = $resourcegenerator->create_instance($record, $options);
@@ -527,7 +540,7 @@ class tool_generator_course_backend extends tool_generator_backend {
     /**
      * Creates one forum activity with a bunch of posts.
      */
-    private function create_forum() {
+    private function create_forum($course) {
         global $DB;
 
         $discussions = self::$paramforumdiscussions[$this->size];
@@ -538,7 +551,7 @@ class tool_generator_course_backend extends tool_generator_backend {
 
         // Create empty forum.
         $forumgenerator = $this->generator->get_plugin_generator('mod_forum');
-        $record = array('course' => $this->course,
+        $record = array('course' => $course,
                 'name' => get_string('pluginname', 'forum'));
         $options = array('section' => 0);
         $forum = $forumgenerator->create_instance($record, $options);
@@ -546,7 +559,7 @@ class tool_generator_course_backend extends tool_generator_backend {
         // Add discussions and posts.
         $sofar = 0;
         for ($i = 0; $i < $discussions; $i++) {
-            $record = array('forum' => $forum->id, 'course' => $this->course->id,
+            $record = array('forum' => $forum->id, 'course' => $course->id,
                     'userid' => $this->get_target_user());
             $discussion = $forumgenerator->create_discussion($record);
             $parentid = $DB->get_field('forum_posts', 'id', array('discussion' => $discussion->id), MUST_EXIST);

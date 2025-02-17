@@ -40,7 +40,9 @@ list($options, $unrecognized) = cli_get_params(
         'filesizelimit' => false,
         'bypasscheck' => false,
         'additionalmodules' => "",
-        'quiet' => false
+        'quiet' => false,
+        'userscount' => false,
+        'coursescount' => false
     ),
     array(
         'h' => 'help'
@@ -88,6 +90,8 @@ $summary = $options['summary'];
 $sizename = $options['size'];
 $fixeddataset = $options['fixeddataset'];
 $filesizelimit = $options['filesizelimit'];
+$userscount = $options['userscount'];
+$coursescount = $options['coursescount'];
 
 // Check size.
 try {
@@ -108,9 +112,12 @@ if (!empty($options['additionalmodules'])) {
     $additionalmodulesarray = explode(',', trim($options['additionalmodules']));
 }
 // Do backend code to generate course.
+echo PHP_EOL.'USers count: '.$userscount;
 $backend = new tool_generator_course_backend(
     $shortname,
     $size,
+    $userscount,
+    $coursescount,
     $fixeddataset,
     $filesizelimit,
     empty($options['quiet']),
@@ -119,8 +126,10 @@ $backend = new tool_generator_course_backend(
     FORMAT_HTML,
     $additionalmodulesarray
 );
-$id = $backend->make();
+$idlist = $backend->make();
 
 if (empty($options['quiet'])) {
-    echo PHP_EOL.'Generated course: '.course_get_url($id).PHP_EOL;
+    foreach ($idlist as $id) {
+        echo PHP_EOL.'Generated course: '.course_get_url($id).PHP_EOL;
+    }
 }

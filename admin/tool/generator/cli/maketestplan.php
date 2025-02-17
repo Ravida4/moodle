@@ -35,13 +35,20 @@ list($options, $unrecognized) = cli_get_params(
         'shortname' => false,
         'size' => false,
         'bypasscheck' => false,
-        'updateuserspassword' => false
+        'updateuserspassword' => false,
+        'userscount' => false,
+        'coursescount' => false
     ),
     array(
         'h' => 'help'
     )
 );
 
+$coursescount = $options['coursescount'];
+$userscount = $options['userscount'];
+$sizepercourse = $userscount/$coursescount;
+echo $coursescount.PHP_EOL;
+echo $userscount.PHP_EOL;
 $testplansizes = '* ' . implode(PHP_EOL . '* ', tool_generator_testplan_backend::get_size_choices());
 
 // Display help.
@@ -72,34 +79,40 @@ if (empty($options['bypasscheck']) && !$CFG->debugdeveloper) {
 }
 
 // Get options.
-$shortname = $options['shortname'];
-$sizename = $options['size'];
+$courseidList = array();
 
-// Check size.
-try {
-    $size = tool_generator_testplan_backend::size_for_name($sizename);
-} catch (coding_exception $e) {
-    cli_error("Error: Invalid size ($sizename). Use --help for help.");
-}
+for ($coursepart = 1; $coursepart <= $coursescount; $coursepart++) {
+    $shortname = $options['shortname'].$coursepart;
+    $sizename = $options['size'];
 
-// Check selected course.
-if ($errors = tool_generator_testplan_backend::has_selected_course_any_problem($shortname, $size)) {
-    // Showing the first reported problem.
-    cli_error("Error: " . reset($errors));
-}
+    // Check size.
+    // try {
+    //     $size = tool_generator_testplan_backend::size_for_name($sizename);
+    // } catch (coding_exception $e) {
+    //     cli_error("Error: Invalid size ($sizename). Use --help for help.");
+    // }
 
-// Checking if test users password is set.
-if (empty($CFG->tool_generator_users_password) || is_bool($CFG->tool_generator_users_password)) {
-    cli_error("Error: " . get_string('error_nouserspassword', 'tool_generator'));
+    // Check selected course.
+    if ($errors = tool_generator_testplan_backend::has_selected_course_any_problem($shortname, $sizepercourse)) {
+        // Showing the first reported problem.
+        cli_error("Error: " . reset($errors));
+    }
+
+    // Checking if test users password is set.
+    if (empty($CFG->tool_generator_users_password) || is_bool($CFG->tool_generator_users_password)) {
+        cli_error("Error: " . get_string('error_nouserspassword', 'tool_generator'));
+    }
+    $courseid = $DB->get_field('course', 'id', array('shortname' => $shortname));
+    $courseidList[] = $courseid;
 }
 
 // Switch to admin user account.
 \core\session\manager::set_user(get_admin());
 
 // Create files.
-$courseid = $DB->get_field('course', 'id', array('shortname' => $shortname));
-$usersfile = tool_generator_testplan_backend::create_users_file($courseid, !empty($options['updateuserspassword']), $size);
-$testplanfile = tool_generator_testplan_backend::create_testplan_file($courseid, $size);
+
+$usersfile = tool_generator_testplan_backend::create_users_file($courseidList, !empty($options['updateuserspassword']), $sizepercourse);
+$testplanfile = tool_generator_testplan_backend::create_testplan_file($courseidList[0], $sizepercourse);
 
 // One file path per line so other CLI scripts can easily parse the output.
 echo moodle_url::make_pluginfile_url(
